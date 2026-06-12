@@ -1,5 +1,5 @@
 """
-Application Streamlit SADAKA — regroupe 3 outils :
+Application Streamlit SDK — regroupe 3 outils :
   1. Saisie Facture   : extraction de factures fournisseurs (BL) depuis PDF/ZIP
   2. Saisie Situation : extraction des factures de situation clients (PDF)
                         (Génération automatique ou mise à jour gérée en arrière-plan)
