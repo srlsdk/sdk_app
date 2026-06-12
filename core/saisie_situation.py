@@ -2,11 +2,9 @@
 core/saisie_situation.py
 -------------------------
 Extraction des factures de situation (clients) depuis un PDF mensuel
-SADAKA, et mise à jour d'un fichier Excel "SUIVI DU CA" à partir d'un
-modèle fourni.
+SADAKA, et génération directe d'un fichier Excel "SUIVI DU CA" sans modèle externe.
 
-Logique métier identique au script CLI d'origine (saisie_situation.py),
-adaptée pour être appelée depuis Streamlit (entrées/sorties en mémoire).
+Logique métier identique adaptée pour être appelée depuis Streamlit avec entrées/sorties en mémoire.
 """
 
 import io
@@ -14,20 +12,21 @@ import json
 import base64
 import re
 import anthropic
-from openpyxl import load_workbook
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CONFIGURATION
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Nom de la feuille à utiliser dans le fichier modèle. Si absent, la feuille
-# active sera utilisée.
 SHEET_NAME = "SUIVI DU CA"
 
-# Première ligne où écrire les données (les lignes 1-3 sont les en-têtes)
-FIRST_DATA_ROW = 4
+# La ligne 5 contient désormais les en-têtes détaillés, la première ligne de données est la 6
+FIRST_DATA_ROW = 6
 
-# Mapping colonnes Excel -> clés JSON
+# Mapping colonnes Excel -> clés JSON (Basé sur la structure de votre PJ)
+# Colonne 1: Client, 2: Affaire, 3: Date facture, 4: N° Situation/commande, 5: n°fact, etc.
 COLUMN_MAPPING = {
     1: "client",
     2: "affaire",
@@ -38,8 +37,8 @@ COLUMN_MAPPING = {
     7: "tva_montant",
     8: "montant_ttc",
     9: "rg_ht",
-    11: "penalites",
     13: "prorata_ht",
+    11: "penalites", # Ajusté selon les en-têtes standard
 }
 
 SYSTEM_PROMPT = """
@@ -115,60 +114,105 @@ def extraire_donnees_pdf(pdf_path: str, api_key: str) -> list:
     )
 
     contenu = message.content[0].text.strip()
-
     match = re.search(r"\[.*\]", contenu, re.DOTALL)
     json_clean = match.group(0) if match else contenu
 
     return json.loads(json_clean)
 
 
-def generer_excel(template_path: str, factures: list) -> bytes:
-    """
-    Charge le fichier modèle, vide les anciennes lignes de données puis écrit
-    une ligne par facture en conservant le style (bordures, formats) des
-    lignes du modèle.
+def initialiser_structure_excel() -> Workbook:
+    """Crée un Workbook openpyxl avec la structure exacte du fichier SUIVI fourni en PJ."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = SHEET_NAME
+    
+    # Styles
+    font_main_header = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    font_sub_header = Font(name="Calibri", size=10, italic=True)
+    font_col_header = Font(name="Calibri", size=10, bold=True)
+    
+    fill_blue = PatternFill(start_color="1F497D", end_color="1F497D", fill_type="solid")
+    fill_light_gray = PatternFill(start_color="EFEFEF", end_color="EFEFEF", fill_type="solid")
+    
+    align_center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    align_left = Alignment(horizontal="left", vertical="center")
+    
+    thin_border_side = Side(style="thin", color="D9D9D9")
+    border_all = Border(left=thin_border_side, right=thin_border_side, top=thin_border_side, bottom=thin_border_side)
 
-    Retourne le contenu xlsx en bytes.
-    """
-    wb = load_workbook(template_path)
-    ws = wb[SHEET_NAME] if SHEET_NAME in wb.sheetnames else wb.active
+    # Ligne 1 : En-têtes généraux de rapprochement
+    ws.cell(row=1, column=1, value="Facturation mensuelle").font = Font(name="Calibri", size=12, bold=True)
+    ws.cell(row=1, column=14, value="Encaissement").font = Font(name="Calibri", size=11, bold=True)
+    ws.cell(row=1, column=16, value="Solde créance TTC").font = Font(name="Calibri", size=11, bold=True)
 
-    last_existing_row = FIRST_DATA_ROW
-    while ws.cell(row=last_existing_row, column=5).value:
-        last_existing_row += 1
-    last_existing_row -= 1
-    if last_existing_row < FIRST_DATA_ROW:
-        last_existing_row = FIRST_DATA_ROW
+    # Ligne 3 : Sous-catégories (ex: Dont)
+    ws.cell(row=3, column=7, value="Dont").font = font_sub_header
+    ws.cell(row=3, column=7).alignment = align_center
 
-    for r in range(FIRST_DATA_ROW, last_existing_row + 1):
-        for c in range(1, 15):
-            ws.cell(row=r, column=c).value = None
+    # Ligne 5 : En-têtes de colonnes officiels
+    headers = [
+        "Client", "Affaire", "Date facture", "N° Situation / commande", "n°fact", 
+        "HT", "Dont TVA", "TTC", "RG HT", "TVA RG", "Penalites", "TVA Prorata", 
+        "Prorata HT", "Date Valeur banque", "Mode Rglmt", "STD / DGD", "RG", "TTC", "EG / PROMO"
+    ]
+    
+    ws.row_dimensions[5].height = 28
+    for col_idx, text in enumerate(headers, 1):
+        cell = ws.cell(row=5, column=col_idx, value=text)
+        cell.font = font_main_header if col_idx <= 13 else font_col_header
+        cell.fill = fill_blue if col_idx <= 13 else fill_light_gray
+        cell.alignment = align_center
+        cell.border = border_all
 
-    max_col = 14
+    return wb
+
+
+def generer_excel_sans_template(factures: list) -> bytes:
+    """Génère le contenu du fichier Excel directement en mémoire."""
+    wb = initialiser_structure_excel()
+    ws = wb[SHEET_NAME]
+
+    thin_border_side = Side(style="thin", color="E0E0E0")
+    border_data = Border(left=thin_border_side, right=thin_border_side, top=thin_border_side, bottom=thin_border_side)
+    
+    # Formats Excel de cellule
+    format_currency = '#,##0.00 €'
+    format_date = 'YYYY-MM-DD'
 
     for i, facture in enumerate(factures):
         row_idx = FIRST_DATA_ROW + i
+        ws.row_dimensions[row_idx].height = 20
 
-        if row_idx > last_existing_row:
-            style_row = last_existing_row
-            for c in range(1, max_col + 1):
-                src = ws.cell(row=style_row, column=c)
-                dst = ws.cell(row=row_idx, column=c)
-                dst._style = src._style.copy() if hasattr(src._style, "copy") else src._style
+        for col_idx in range(1, 20):  # Initialisation des bordures de la ligne de données
+            ws.cell(row=row_idx, column=col_idx).border = border_data
 
         for col, key in COLUMN_MAPPING.items():
             cell = ws.cell(row=row_idx, column=col)
             value = facture.get(key)
 
-            if col in (1, 2, 4, 5):
+            if col in (1, 2, 4, 5):  # Textes
                 cell.value = "" if value is None else str(value)
-            elif col == 3:
+                cell.alignment = Alignment(horizontal="left", vertical="center")
+            elif col == 3:  # Dates
                 cell.value = value if value else None
-            else:
+                cell.number_format = format_date
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+            else:  # Données financières (Floats)
                 try:
                     cell.value = float(value) if value not in (None, "") else 0.0
                 except (TypeError, ValueError):
                     cell.value = 0.0
+                cell.number_format = format_currency
+                cell.alignment = Alignment(horizontal="right", vertical="center")
+
+    # Ajustement automatique de la largeur des colonnes pour la lisibilité
+    for col in ws.columns:
+        max_len = 0
+        col_letter = get_column_letter(col[0].column)
+        for cell in col:
+            if cell.row >= 5 and cell.value:
+                max_len = max(max_len, len(str(cell.value)))
+        ws.column_dimensions[col_letter].width = max(max_len + 4, 12)
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -176,15 +220,14 @@ def generer_excel(template_path: str, factures: list) -> bytes:
     return buf.getvalue()
 
 
-def traiter(pdf_path: str, template_path: str, api_key: str, log=print) -> bytes:
+def traiter(pdf_path: str, api_key: str, log=print) -> bytes:
     """
-    Point d'entrée principal.
-    pdf_path, template_path : chemins sur disque (temp dir).
-    Retourne le contenu xlsx en bytes.
+    Point d'entrée principal modifié (ne prend plus de template_path).
+    Retourne le contenu xlsx complet en bytes.
     """
     log("Lecture du PDF par Claude Haiku...")
     factures = extraire_donnees_pdf(pdf_path, api_key)
     log(f"{len(factures)} facture(s) extraite(s).")
 
-    log("Génération du fichier Excel...")
-    return generer_excel(template_path, factures)
+    log("Génération du fichier Excel de Suivi...")
+    return generer_excel_sans_template(factures)
