@@ -18,9 +18,9 @@ import streamlit as st
 
 from core import saisie_facture, saisie_situation, suivi_mo
 
-st.set_page_config(page_title="SADAKA - Outils", layout="wide")
+st.set_page_config(page_title="Outils SDK", layout="wide")
 
-st.title("Outils SADAKA")
+st.title("Outils SDK")
 
 tab1, tab2, tab3 = st.tabs(["Saisie Facture", "Saisie Situation", "Suivi MO"])
 
