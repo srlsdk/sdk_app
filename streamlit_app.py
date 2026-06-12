@@ -2,7 +2,7 @@
 Application Streamlit SADAKA — regroupe 3 outils :
   1. Saisie Facture   : extraction de factures fournisseurs (BL) depuis PDF/ZIP
   2. Saisie Situation : extraction des factures de situation clients (PDF)
-                        + mise à jour d'un fichier Excel "SUIVI DU CA"
+                        (Génération automatique ou mise à jour gérée en arrière-plan)
   3. Suivi MO         : récap des jours travaillés par chantier (Excel "Suivi heures")
 
 Clé API Anthropic : à renseigner dans .streamlit/secrets.toml
@@ -104,17 +104,15 @@ with tab1:
 # ─────────────────────────────────────────────────────────────────────────────
 with tab2:
     st.header("Saisie Situation (factures clients)")
-    st.write("Envoyez le PDF de facturation mensuelle et le fichier Excel modèle "
-             "(onglet 'SUIVI DU CA').")
+    st.write("Envoyez le PDF de facturation mensuelle pour générer ou mettre à jour le suivi.")
 
     pdf_situation = st.file_uploader("PDF de facturation", type=["pdf"], key="situation_pdf")
-    template_xlsx = st.file_uploader("Fichier Excel modèle", type=["xlsx"], key="situation_template")
 
     if st.button("Lancer l'extraction", key="situation_run"):
         api_key = get_api_key()
 
-        if not pdf_situation or not template_xlsx:
-            st.warning("Merci d'envoyer le PDF et le fichier modèle.")
+        if not pdf_situation:
+            st.warning("Merci d'envoyer le PDF.")
         elif api_key:
             with tempfile.TemporaryDirectory() as tmpdir:
                 tmp_path = Path(tmpdir)
@@ -122,10 +120,6 @@ with tab2:
                 pdf_path = tmp_path / pdf_situation.name
                 with open(pdf_path, "wb") as f:
                     f.write(pdf_situation.read())
-
-                template_path = tmp_path / template_xlsx.name
-                with open(template_path, "wb") as f:
-                    f.write(template_xlsx.read())
 
                 log_area = st.empty()
                 logs = []
@@ -137,7 +131,7 @@ with tab2:
                 with st.spinner("Extraction en cours..."):
                     try:
                         result_bytes = saisie_situation.traiter(
-                            str(pdf_path), str(template_path), api_key, log=log
+                            str(pdf_path), api_key, log=log
                         )
                         st.success("Extraction terminée.")
                         st.download_button(
